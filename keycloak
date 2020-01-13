@@ -1,0 +1,221 @@
+Keycloak instalación
+----------------------------------
+requisitos:
+-java JDK 1.8
+-512 MB de ram
+-Al menos 1GB de espacio
+
+1) Ingresar a la url y descargar el comprimido
+
+https://www.keycloak.org/downloads.html
+
+o por el contrario bajar el comprimido directamente al servidor a traves del comando wget
+
+wget https://downloads.jboss.org/keycloak/8.0.1/keycloak-8.0.1.tar.gz
+
+2) descomprimir el archivo y moverlo al directorio /opt
+
+  tar -zxvf keycloak-8.0.1.tar.gz
+  
+3)Luego de esto, se configurará keycloak para correr como daemon
+
+3a Se agregará el grupo keycloak
+
+groupadd keycloak
+
+3b Se creará el usuario keycloak con su directorio home en /opt/keycloak
+
+3c  Se asignará al usuario keycloak los permisos de ejecucion y la propiedad del directorio keycloak-8.0.1
+
+chown -R keycloak: keycloak-8.0.1
+chmod o+x /opt/keycloak-8.0.1/bin/
+
+4) Se creará un directorio de configuracion en /etc
+
+cd /etc/
+mkdir keycloak
+
+5) Se copiará el archivo de configuracion de wildfly y se renombrará a keycloak.conf
+
+cp /opt/keycloak-8.0.1/docs/contrib/scripts/systemd/wildfly.conf /etc/keycloak/keycloak.conf
+
+6) Se copiará el script de inicio hacia el directorio bin de keycloak
+
+cp /opt/keycloak-8.0.1/docs/contrib/scripts/systemd/launch.sh /opt/keycloak-8.0.1/bin/
+
+7) Se configurará a keycloak como el usuario propietario de el script de inicio
+
+chown keycloak: /opt/keycloak-8.0.1/bin/launch.sh
+
+8) Se modificará el archivo de configuracion con el directorio correcto
+
+nano /opt/keycloak/bin/launch.sh
+vim /opt/keycloak/bin/launch.sh
+
+dentro de este se modificará el directorio de /opt/wildfly a /opt/keycloak
+
+/opt/wildfly --> /opt/keycloak-8.0.1
+
+9) Copiar el archivo de servicio al directorio etc
+
+cp /opt/keycloak-8.0.1/docs/contrib/scripts/systemd/wildfly.service /etc/systemd/system/keycloak.service
+
+10) Modificar el archivo de servicio anteriormente copiado
+
+nano /etc/systemd/system/keycloak.service
+vim /etc/systemd/system/keycloak.service
+
+modificarlo y dejarlo de la siguiente forma
+---------------------------------------------------------------------
+[Unit]
+Description=The Keycloak Server
+After=syslog.target network.target
+Before=httpd.service
+
+[Service]
+Environment=LAUNCH_JBOSS_IN_BACKGROUND=1
+EnvironmentFile=/etc/keycloak/keycloak.conf
+User=root
+Group=keycloak
+LimitNOFILE=102642
+PIDFile=/var/run/keycloak-8.0.1/keycloak.pid
+ExecStart=/opt/keycloak-8.0.1/bin/launch.sh $WILDFLY_MODE $WILDFLY_CONFIG $WILDFLY_BIND
+StandardOutput=null
+
+[Install]
+WantedBy=multi-user.target
+--------------------------------------------------------------------------
+
+guardar los cambios y cerrar el archivo
+
+11) Volver a cargar los cambios al servicio y habilitarlos al inicio del sistema
+
+systemctl daemon-reload
+
+systemctl enable keycloak
+
+**Nota: En caso de desear hacer una integracion con la base de datos seguir los siguientes pasos, en caso contrario iniciar los servicios y agregar un usuario.
+
+systemctl start keycloak
+
+**Nota: En caso de acceder via localhost, se puede crear el usuario desde la pagina web. En el caso contrario, este debe ser creado via shell.
+
+dirigirse al directorio /opt/keycloak-8.0.1/bin y ejecutar lo siguiente:
+
+./add-user-keycloak.sh -u usuario -p "contraseña"
+./add-user-keycloak.sh -u kcadmin -p "P4ssw0rd"
+
+Luego de esto, reiniciar los servicios
+
+systemctl restart keycloak
+
+y luego dirigirse a la url e iniciar sesion:
+
+http://ip:8080/auth/admin
+
+
+
+-------Integración con la base de datos Postgresql -----------------------------
+
+1) Dirigirse al directorio siguiente:
+
+cd /opt/keycloak/current/modules/org/postgresql/main
+
+Crear los siguientes directorios
+
+mkdir postgresql
+
+mkdir postgresql/main
+
+2) Descargar driver desde la pagina. En este caso usaremos postgresql 11.6 por lo tanto se descargará el siguiente driver en su version 42.2.5 y se alojará este driver en la carpeta main creada anteriormente.
+
+https://jdbc.postgresql.org/download.html
+
+wget https://jdbc.postgresql.org/download/postgresql-42.2.5.jar
+
+3) Crear un archivo llamado module.xml, llenarlo con el siguiente contenido y asegurarse de que quede en el directorio main.
+
+<?xml version="1.0" ?>
+<module xmlns="urn:jboss:module:1.3" name="org.postgresql">
+
+    <resources>
+        <resource-root path="postgresql-42.2.5.jar"/>
+    </resources>
+
+    <dependencies>
+        <module name="javax.api"/>
+        <module name="javax.transaction.api"/>
+    </dependencies>
+</module>
+
+**Nota: La version del jar debe cambiar en caso de la version utilizada
+
+4) Dirigirse al directorio /opt/keycloak-8.0.1/standalone/configuration 
+
+5) Modificar el archivo standalone.xml
+
+vim standalone.xml
+
+dirigirse al contenido a modificar y comentar el siguiente contenido para evitar tener datasources duplicados.
+
+
+<datasource jndi-name="java:jboss/datasources/KeycloakDS" pool-name="KeycloakDS" enabled="true" use-java-context="true" statistics-enabled="${wildfly.datasources.statistics-enabled:${wildfly.statistics-enabled:false}}">
+ <connection-url>jdbc:h2:${jboss.server.data.dir}/keycloak;AUTO_SERVER=TRUE</connection-url>
+ <driver>h2</driver>
+ <security>
+     <user-name>sa</user-name>
+     <password>sa</password>
+ </security>
+ </datasource>
+ 
+ 6)Agregar el datasource el cual será utilizado justo debajo del que se comentó.
+ 
+ <datasource jndi-name="java:jboss/datasources/KeycloakDS" pool-name="KeycloakDS" enabled="true" use-java-context="true">
+           <connection-url>jdbc:postgresql://localhost/keycloak</connection-url>
+           <driver>postgresql</driver>
+           <pool>
+               <max-pool-size>20</max-pool-size>
+           </pool>
+           <security>
+               <user-name>William</user-name>
+               <password>password</password>
+           </security>
+       </datasource>
+       
+ En donde   <connection-url>jdbc:postgresql://localhost*:puerto**/keycloak***</connection-url>
+            <user-name>William****</user-name>
+            <password>password*****</password>
+ 
+ *: ip del equipo que contiene la base de datos.
+ **:puerto utilizado por la base de datos.
+ ***:Esquema que sera utilizado
+ *****:Usuario de la base de datos.
+ ******:Contraseña de la base de datos.
+ 
+ Agregar el driver que se utilizará
+ 
+ <driver name="h2" module="com.h2database.h2">
+              <xa-datasource-class>org.h2.jdbcx.JdbcDataSource</xa-datasource-class>
+          </driver>
+          
+ quedando de la siguiente forma
+ 
+   <subsystem xmlns="urn:jboss:domain:datasources:5.0">
+     <datasources>
+       ...
+       <drivers>
+          <driver name="postgresql" module="org.postgresql">
+              <xa-datasource-class>org.postgresql.xa.PGXADataSource</xa-datasource-class>
+          </driver>
+          <driver name="h2" module="com.h2database.h2">
+              <xa-datasource-class>org.h2.jdbcx.JdbcDataSource</xa-datasource-class>
+          </driver>
+       </drivers>
+     </datasources>
+  </subsystem>
+
+Luego de haber modificado esto, guardar y cerrar el archivo.
+
+7) Reiniciar los servicios y verificar que se pueda acceder a la url. En caso de que esto no funcione, verificar credenciales y datos modificados, como tambien revisar los logs.
+
+Directorio de logs --> /opt/keycloak-8.0.1/standalone/logs
